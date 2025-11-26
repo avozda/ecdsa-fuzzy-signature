@@ -1,340 +1,293 @@
-# BiometricSig
+# ecdsa-fuzzy-signature
 
-A Python library for biometric-based digital signatures using fuzzy extractors and ECDSA.
+A TypeScript library for biometric-based digital signatures using fuzzy extractors and ECDSA.
+
+This library provides a simple API to derive ECDSA signing keys from noisy biometric data, enabling biometric authentication for digital signatures without storing the biometric template directly.
 
 ## Overview
 
-**BiometricSig** provides a simple, biometric-agnostic API for generating cryptographic signatures from biometric data. The library combines:
+The library treats "biometric" as an opaque `Uint8Array` of fixed length. The caller is responsible for:
+- Feature extraction from raw biometric data (fingerprint, face, iris, etc.)
+- Normalization and quantization to produce a stable `Uint8Array`
+- Ensuring sufficient entropy in the biometric representation
 
-- **Fuzzy Extractors**: Derive stable cryptographic keys from noisy biometric inputs
-- **ECDSA**: Produce and verify digital signatures using elliptic curve cryptography
-
-The library treats biometric data as opaque bytes — the caller is fully responsible for feature extraction, normalization, and ensuring sufficient stability between enrollment and signing samples.
-
-### Key Features
-
-- 🔐 **Simple API**: Three functions — `enroll()`, `sign()`, `verify()`
-- 🧬 **Biometric Agnostic**: Works with any biometric type (fingerprint, face, iris, etc.)
-- 🔑 **Standards-Based**: Uses ECDSA with NIST P-256 curve
-- 🛡️ **Error Tolerant**: Fuzzy extractor handles minor variations in biometric samples
-- 📦 **Minimal Dependencies**: Only `python-ecdsa` and `fuzzy-extractor`
+The library handles:
+- Fuzzy extraction to derive stable cryptographic keys from noisy inputs
+- ECDSA key derivation and signing on the secp256k1 curve
+- Signature verification using standard ECDSA
 
 ## Literature and Background
 
 ### Fuzzy Extractors
 
-Fuzzy extractors are cryptographic primitives that derive strong, stable keys from noisy inputs like biometric data. Unlike traditional key derivation, fuzzy extractors can reproduce the _same_ key even when given slightly different inputs, as long as they are "close enough."
+Fuzzy extractors are cryptographic primitives that derive strong, reproducible keys from noisy data. They were formalized by Dodis et al. in ["Fuzzy Extractors: How to Generate Strong Keys from Biometrics and Other Noisy Data"](https://eprint.iacr.org/2003/235).
 
-The foundational work is:
+A fuzzy extractor consists of two procedures:
+- **Gen(b)**: Takes a biometric input `b` and outputs a stable key `K` and helper data (sketch) `P`
+- **Rep(b', P)**: Given a noisy version `b'` close to the original `b` and the sketch `P`, reproduces the same key `K`
 
-> Dodis, Y., Reyzin, L., & Smith, A. (2004, 2008). _Fuzzy Extractors: How to Generate Strong Keys from Biometrics and Other Noisy Data_. SIAM Journal on Computing.
+This library implements a code-and-hash construction using repetition codes for error correction and HKDF for key derivation.
 
-A fuzzy extractor consists of two algorithms:
+### Secure Sketches
 
-- **Gen(b)** → (K, sketch): Generates a key K and public helper data (sketch) from biometric b
-- **Rep(b', sketch)** → K: Reproduces the same key K from a similar biometric b', using the sketch
-
-The security guarantee is that K is computationally indistinguishable from random, even given the sketch, as long as the original biometric has sufficient min-entropy.
-
-### Biometric Cryptography
-
-Directly using biometrics as cryptographic keys is problematic because:
-
-1. Biometric measurements are inherently noisy
-2. Biometrics cannot be changed if compromised
-3. Biometric templates need to be protected
-
-Fuzzy extractors address (1) by tolerating measurement noise. The sketch reveals limited information about the biometric, providing some protection for (3). For (2), different sketches from the same biometric produce different keys, allowing key rotation.
+A secure sketch allows recovering the original biometric from a noisy reading without revealing the biometric itself. The sketch leaks some information about the biometric (bounded by the error tolerance), so the biometric must have sufficient min-entropy.
 
 ### ECDSA Signatures
 
-ECDSA (Elliptic Curve Digital Signature Algorithm) provides:
-
-- Strong security with compact keys and signatures
-- Deterministic signature generation (RFC 6979)
-- Wide support and standardization
-
-This library uses the NIST P-256 curve (secp256r1), providing approximately 128-bit security level.
+The library uses ECDSA (Elliptic Curve Digital Signature Algorithm) on the secp256k1 curve for digital signatures. Signatures follow RFC 6979 for deterministic nonce generation, ensuring:
+- Same message + key always produces the same signature
+- No random number generator vulnerabilities
 
 ## Software Requirements
 
-- **Python**: 3.11 or later
-- **Dependencies**:
-  - `ecdsa>=0.18.0` — ECDSA cryptographic operations
-  - `fuzzy-extractor>=0.3` — Fuzzy extractor implementation ([GitHub](https://github.com/carter-yagemann/python-fuzzy-extractor))
+- **Node.js**: ≥ 18.0.0
+- **TypeScript**: ≥ 5.0.0 (for development)
+
+### Dependencies
+
+- `@noble/curves` - Audited, minimal ECDSA implementation
+- `@noble/hashes` - Audited, minimal hash functions (SHA-256, HKDF)
 
 ## Installation
 
-### From Source
+### As a Git Submodule
+
+```bash
+# Add as submodule
+git submodule add https://github.com/your-username/ecdsa-fuzzy-signature.git lib/ecdsa-fuzzy-signature
+
+# Install dependencies
+cd lib/ecdsa-fuzzy-signature
+npm install
+
+# Build the library
+npm run build
+```
+
+### Manual Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/example/biometricsig.git
-cd biometricsig
+git clone https://github.com/your-username/ecdsa-fuzzy-signature.git
+cd ecdsa-fuzzy-signature
 
-# Create and activate a virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# Install dependencies
+npm install
 
-# Install the package with dependencies
-pip install -e .
+# Build
+npm run build
 
-# Install development dependencies (for testing)
-pip install -e ".[dev]"
-
-# Run the test suite
-pytest
-```
-
-### From PyPI (when published)
-
-```bash
-pip install biometricsig
+# Run tests
+npm test
 ```
 
 ## Usage
 
 ### Basic Example
 
-```python
-from biometricsig import enroll, sign, verify
+```typescript
+import { enroll, sign, verify } from 'ecdsa-fuzzy-signature';
 
-# Your biometric data as bytes (from feature extraction)
-biometric_sample = get_biometric_bytes()  # Your function
+// 1. Enrollment: Generate verification key and sketch from biometric
+const biometric = new Uint8Array(32); // Your preprocessed biometric data
+const { vk, sketch } = enroll(biometric);
 
-# STEP 1: Enrollment (done once, store vk and sketch)
-vk, sketch = enroll(biometric_sample)
+// Store `sketch` securely (needed for signing)
+// Distribute `vk` publicly (for verification)
 
-# Store:
-#   - vk (verification key): Can be shared publicly
-#   - sketch: Store securely for signing operations
+// 2. Signing: Create signature using biometric and sketch
+const message = new TextEncoder().encode('Hello, World!');
+const signature = sign(biometric, sketch, message);
 
-# STEP 2: Signing (when user wants to sign something)
-message = b"I authorize this transaction"
-signature = sign(biometric_sample, sketch, message)
-
-# STEP 3: Verification (anyone with vk can verify)
-is_valid = verify(vk, message, signature)
-print(f"Signature valid: {is_valid}")
+// 3. Verification: Verify signature using public key only
+const isValid = verify(vk, message, signature);
+console.log('Signature valid:', isValid); // true
 ```
 
 ### Handling Biometric Mismatch
 
-```python
-from biometricsig import sign, BiometricMismatchError
+```typescript
+import { sign, FuzzyExtractionError } from 'ecdsa-fuzzy-signature';
 
-try:
-    signature = sign(biometric_sample, sketch, message)
-except BiometricMismatchError:
-    print("Biometric sample doesn't match enrollment!")
+try {
+  const signature = sign(biometric, sketch, message);
+} catch (error) {
+  if (error instanceof FuzzyExtractionError) {
+    console.error('Biometric authentication failed');
+    // Handle authentication failure
+  }
+}
 ```
 
-### Using the Class-Based Interface
+### Class-Based API
 
-```python
-from biometricsig import BiometricSigner
+```typescript
+import { BiometricSigner } from 'ecdsa-fuzzy-signature';
 
-# Configure with custom Hamming threshold
-signer = BiometricSigner(hamming_threshold=16)
+const signer = new BiometricSigner();
 
-vk, sketch = signer.enroll(biometric_bytes)
-signature = signer.sign(biometric_bytes, sketch, message)
-is_valid = signer.verify(vk, message, signature)
+// Enrollment
+const { vk, sketch } = signer.enroll(biometric);
+
+// Signing
+const signature = signer.sign(biometric, sketch, message);
+
+// Verification (static method - no biometric needed)
+const isValid = BiometricSigner.verify(vk, message, signature);
 ```
 
 ### Preparing Biometric Data
 
-The library expects biometric data as fixed-length bytes. Here's an example of converting a float embedding to bytes:
+The library expects a fixed-length `Uint8Array`. Here's an example of converting a 128-dimensional float embedding (common in face recognition) to the expected format:
 
-```python
-import struct
-import hashlib
+```typescript
+/**
+ * Convert a float embedding to Uint8Array for the fuzzy extractor.
+ * This is an example - adapt to your specific biometric system.
+ */
+function embeddingToBytes(embedding: Float32Array): Uint8Array {
+  // Option 1: Direct byte conversion (32 bytes from 8 floats)
+  const buffer = new ArrayBuffer(32);
+  const view = new DataView(buffer);
+  for (let i = 0; i < 8 && i < embedding.length; i++) {
+    view.setFloat32(i * 4, embedding[i], true);
+  }
+  return new Uint8Array(buffer);
+  
+  // Option 2: Quantize to bytes (more compact)
+  // const quantized = new Uint8Array(32);
+  // for (let i = 0; i < 32 && i < embedding.length; i++) {
+  //   // Map [-1, 1] to [0, 255]
+  //   quantized[i] = Math.round((embedding[i] + 1) * 127.5);
+  // }
+  // return quantized;
+}
 
-def embedding_to_bytes(embedding: list[float], target_length: int = 64) -> bytes:
-    """
-    Convert a float embedding to fixed-length bytes.
-
-    Args:
-        embedding: Float vector (e.g., 128-D face embedding)
-        target_length: Desired output length in bytes
-
-    Returns:
-        Fixed-length bytes suitable for biometricsig
-    """
-    # Pack floats to bytes
-    packed = struct.pack(f'{len(embedding)}f', *embedding)
-
-    # Hash to fixed length (provides some normalization)
-    return hashlib.sha512(packed).digest()[:target_length]
-
-# Usage
-face_embedding = get_face_embedding(image)  # Your function
-biometric_bytes = embedding_to_bytes(face_embedding)
-
-vk, sketch = enroll(biometric_bytes)
+// Usage
+const faceEmbedding = getFaceEmbedding(image); // From your face recognition model
+const biometric = embeddingToBytes(faceEmbedding);
+const { vk, sketch } = enroll(biometric);
 ```
-
-### Hamming Threshold Configuration
-
-The `hamming_threshold` parameter controls how many bit differences are tolerated between enrollment and signing biometric samples:
-
-```python
-# Default threshold (8 bits)
-vk, sketch = enroll(biometric_bytes)
-
-# Higher threshold - more tolerant of noise
-vk, sketch = enroll(biometric_bytes, hamming_threshold=16)
-
-# Must use same threshold for signing!
-signature = sign(biometric_bytes, sketch, message, hamming_threshold=16)
-```
-
-**Security Trade-off**: Higher thresholds tolerate more biometric variation but reduce security. The effective security is reduced by approximately the threshold value in bits.
-
-**Note on Sketch Size**: The fuzzy-extractor library uses a digital locker construction which produces relatively large sketches (several MB for typical biometric sizes). This is a trade-off for the strong security guarantees of reusable fuzzy extractors.
 
 ## Architecture
 
 ```
-biometricsig/
-├── __init__.py      # Package exports
-├── api.py           # Public API: enroll(), sign(), verify(), BiometricSigner
-├── fuzzy.py         # Fuzzy extractor wrapper (Gen/Rep operations)
-├── crypto.py        # ECDSA operations and HKDF key derivation
-└── exceptions.py    # Custom exception types
+src/
+├── index.ts     # Main exports
+├── api.ts       # Public API: enroll(), sign(), verify()
+├── fuzzy.ts     # Fuzzy extractor: Gen(), Rep()
+├── crypto.ts    # ECDSA utilities: key derivation, signing
+└── types.ts     # TypeScript type definitions
+
+tests/
+├── api.test.ts    # Integration tests
+├── crypto.test.ts # ECDSA unit tests
+└── fuzzy.test.ts  # Fuzzy extractor unit tests
 ```
 
 ### Data Flow
 
 ```
-                  ENROLLMENT
-                  ──────────
-                       │
-    biometric (bytes) ─┼──► Gen(b) ─────► (K, sketch)
-                       │         │              │
-                       │         │              └──► sketch_bytes (store)
-                       │         │
-                       │         └──► KDF(K) ──► private_key
-                       │                              │
-                       │                              └──► public_key ──► vk_bytes (store)
-                       │
-                  SIGNING
-                  ───────
-                       │
-    biometric (bytes) ─┼──► Rep(b, sketch) ──► K
-    sketch_bytes ──────┘                       │
-                                               └──► KDF(K) ──► private_key
-                                                                    │
-                     message ──────────────────────────────────────►│
-                                                                    │
-                                                          ECDSA.sign(message)
-                                                                    │
-                                                                    └──► signature_bytes
+Enrollment:
+  biometric (Uint8Array)
+      │
+      ▼
+  ┌──────────────┐
+  │ Fuzzy Gen()  │ ──► sketch (helper data)
+  └──────────────┘
+      │
+      ▼ key
+  ┌──────────────┐
+  │    HKDF      │
+  └──────────────┘
+      │
+      ▼ privateKey
+  ┌──────────────┐
+  │ ECDSA getPub │ ──► vk (verification key)
+  └──────────────┘
 
-                  VERIFICATION
-                  ────────────
-                       │
-    vk_bytes ──────────┼──► deserialize ──► public_key
-    message ───────────┤                         │
-    signature_bytes ───┤                         │
-                       │         ECDSA.verify(message, signature)
-                       │                         │
-                       └─────────────────────────┴──► bool (True/False)
+Signing:
+  biometric + sketch
+      │
+      ▼
+  ┌──────────────┐
+  │ Fuzzy Rep()  │ ──► key (or error)
+  └──────────────┘
+      │
+      ▼ key
+  ┌──────────────┐
+  │    HKDF      │
+  └──────────────┘
+      │
+      ▼ privateKey
+  ┌──────────────┐
+  │ ECDSA sign   │ ──► signature
+  └──────────────┘
+
+Verification:
+  vk + message + signature
+      │
+      ▼
+  ┌──────────────┐
+  │ ECDSA verify │ ──► boolean
+  └──────────────┘
 ```
 
-### Module Responsibilities
+### Module Descriptions
 
-| Module          | Purpose                                                                                                            |
-| --------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `api.py`        | Public-facing functions and class. Orchestrates the enrollment, signing, and verification flows.                   |
-| `fuzzy.py`      | Wraps the `fuzzy-extractor` library. Provides `generate()` and `reproduce()` operations with proper serialization. |
-| `crypto.py`     | ECDSA key derivation, serialization, signing, and verification. Implements HKDF for key derivation.                |
-| `exceptions.py` | Custom exception hierarchy for specific error handling.                                                            |
+- **api.ts**: High-level functions that compose the fuzzy extractor and ECDSA operations. Handles input validation and error translation.
 
-### Exception Types
+- **fuzzy.ts**: Implements the fuzzy extractor using a code-and-hash construction with repetition codes. Supports configurable error tolerance.
 
-| Exception                | When Raised                                                |
-| ------------------------ | ---------------------------------------------------------- |
-| `BiometricMismatchError` | Biometric sample too different from enrollment (Rep fails) |
-| `InvalidSketchError`     | Sketch data is corrupted or invalid                        |
-| `InvalidPublicKeyError`  | Public key bytes cannot be deserialized                    |
-| `InvalidSignatureError`  | Signature format is malformed                              |
-| `EnrollmentError`        | Enrollment fails (e.g., insufficient entropy)              |
+- **crypto.ts**: Wraps `@noble/curves` for secp256k1 operations. Handles key derivation from raw entropy using HKDF.
+
+- **types.ts**: TypeScript interfaces and error classes. Defines `EnrollmentResult`, `FuzzyConfig`, and custom errors.
 
 ## Security Considerations
 
-### Caller Responsibilities
+1. **Biometric Entropy**: The security of the derived keys depends on the min-entropy of the biometric input. Ensure your biometric system produces high-entropy representations.
 
-The security of this system depends on factors **outside** this library:
+2. **Sketch Storage**: The sketch reveals some information about the biometric (bounded by error tolerance). Store it securely and consider it sensitive.
 
-1. **Biometric Quality**: The biometric input must have sufficient min-entropy (recommended: ≥80 bits)
-2. **Feature Extraction**: Must produce stable, consistent outputs
-3. **Noise Tolerance**: The Hamming distance between enrollment and signing samples must be within the threshold
-4. **Sketch Storage**: While the sketch doesn't reveal the key, it may leak some biometric information
+3. **Error Tolerance Trade-off**: Higher error tolerance (more bit flips allowed) provides better usability but reduces security. The default parameters balance these concerns.
 
-### Library Guarantees
+4. **No Template Storage**: The actual biometric is never stored. Only the sketch (helper data) is needed, which cannot be used to reconstruct the original biometric.
 
-- Deterministic key derivation (same biometric → same key)
-- Deterministic signatures (RFC 6979)
-- Standard cryptographic primitives (HKDF, ECDSA)
-- Proper error handling for mismatched biometrics
+5. **Constant-Time Operations**: The underlying `@noble/curves` library uses constant-time implementations to resist timing attacks.
 
-### Threat Model
+## API Reference
 
-This library does **not** protect against:
+### `enroll(b: Uint8Array, config?: SignerConfig): EnrollmentResult`
 
-- Compromised biometric capture devices
-- Presentation attacks (spoofed biometrics)
-- Biometric template theft (if raw biometric is captured)
-- Side-channel attacks during biometric capture
+Enrolls a biometric to generate verification key and sketch.
 
-The caller should implement appropriate countermeasures for their threat model.
+- **Parameters**:
+  - `b`: Biometric input (recommended: 32 bytes)
+  - `config`: Optional configuration
+- **Returns**: `{ vk: Uint8Array, sketch: Uint8Array }`
 
-## Known Limitations
+### `sign(b: Uint8Array, sketch: Uint8Array, message: Uint8Array): Uint8Array`
 
-1. **Sketch Size**: The fuzzy-extractor library uses a digital locker construction which produces large sketches (1-5 MB depending on biometric size). This is a trade-off for the strong security guarantees of reusable fuzzy extractors.
+Signs a message using biometric authentication.
 
-2. **Probabilistic Reconstruction**: The fuzzy extractor is probabilistic. In rare cases, key reconstruction may fail even for biometrics within the Hamming threshold, or succeed for biometrics that should be rejected. The probability of such events is very low (< 0.01%) but non-zero.
+- **Parameters**:
+  - `b`: Biometric input
+  - `sketch`: Sketch from enrollment
+  - `message`: Message to sign
+- **Returns**: Signature (64 bytes, compact format)
+- **Throws**: `FuzzyExtractionError` if biometric mismatch
 
-3. **Test Flakiness**: Due to the probabilistic nature of the fuzzy extractor, tests that verify rejection of mismatched biometrics may occasionally fail. This does not indicate a bug but reflects the inherent probabilistic behavior of the underlying cryptographic construction.
+### `verify(vk: Uint8Array, message: Uint8Array, signature: Uint8Array): boolean`
 
-## Testing
+Verifies an ECDSA signature.
 
-```bash
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=biometricsig
-
-# Run specific test file
-pytest tests/test_api.py
-
-# Run with verbose output
-pytest -v
-```
+- **Parameters**:
+  - `vk`: Verification key from enrollment
+  - `message`: Original message
+  - `signature`: Signature to verify
+- **Returns**: `true` if valid, `false` otherwise
 
 ## License
 
-GNU General Public License v3.0 — see [LICENSE](LICENSE) for details.
+GPL-3.0
 
-## Contributing
-
-Contributions are welcome! Please ensure:
-
-1. Code follows the existing style
-2. All tests pass
-3. New functionality includes tests
-4. Documentation is updated
-
-## References
-
-1. Dodis, Y., Reyzin, L., & Smith, A. (2008). Fuzzy Extractors: How to Generate Strong Keys from Biometrics and Other Noisy Data. _SIAM Journal on Computing_, 38(1), 97-139.
-
-2. Canetti, R., et al. (2016). Reusable Fuzzy Extractors for Low-Entropy Distributions. _Annual International Conference on the Theory and Applications of Cryptographic Techniques_. Springer. (Basis for the [python-fuzzy-extractor](https://github.com/carter-yagemann/python-fuzzy-extractor) implementation)
-
-3. Johnson, D., Menezes, A., & Vanstone, S. (2001). The Elliptic Curve Digital Signature Algorithm (ECDSA). _International Journal of Information Security_, 1(1), 36-63.
-
-4. Krawczyk, H., & Eronen, P. (2010). HMAC-based Extract-and-Expand Key Derivation Function (HKDF). _RFC 5869_.
-
-5. Pornin, T. (2013). Deterministic Usage of the Digital Signature Algorithm (DSA) and Elliptic Curve Digital Signature Algorithm (ECDSA). _RFC 6979_.
